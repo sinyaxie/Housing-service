@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="sw">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Housing Services · Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Nunito:wght@400;600;700;800&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="index.html">HOUSING SERVICES<small>ADMIN</small></a>
+    <nav aria-label="Menyu"><a href="index.html">Tazama website</a></nav>
+  </div>
+</header>
+
+<main class="wrap" style="padding-block:28px 40px">
+  <div id="config-warning" class="notice" hidden>Mradi bado haujaunganishwa na Firebase. Fungua <b>lib.js</b> na uweke config yako (angalia SETUP.md).</div>
+
+  <section id="auth" hidden>
+    <h1 class="page">Admin</h1>
+    <div class="panel" style="max-width:520px">
+      <form id="f-in" class="form">
+        <div class="field"><label for="a-email">Barua pepe</label><input id="a-email" type="email" autocomplete="email" required></div>
+        <div class="field"><label for="a-pass">Password</label><input id="a-pass" type="password" autocomplete="current-password" required></div>
+        <button class="btn" type="submit" id="a-btn">Ingia</button>
+        <p id="a-msg" class="msg"></p>
+      </form>
+    </div>
+  </section>
+
+  <section id="dash" hidden>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px">
+      <h1 class="page" style="margin:0">Vyumba vya kukagua</h1>
+      <button class="btn ghost small" type="button" id="logout">Toka</button>
+    </div>
+    <div class="tabs" role="tablist" id="tabs">
+      <button type="button" data-s="pending" aria-selected="true">Zinasubiri <span id="c-pending"></span></button>
+      <button type="button" data-s="approved" aria-selected="false">Zimekubaliwa <span id="c-approved"></span></button>
+      <button type="button" data-s="rejected" aria-selected="false">Zimekataliwa <span id="c-rejected"></span></button>
+    </div>
+    <div id="list" style="display:grid;gap:14px"></div>
+  </section>
+</main>
+
+<script type="module">
+import { auth, db, $, esc, money, authError, say, needConfig,
+  signInWithEmailAndPassword, signOut, onAuthStateChanged,
+  collection, getDocs, doc, getDoc, updateDoc, deleteDoc } from "./lib.js";
+
+let ALL = [], cur = "pending";
+
+if (needConfig()) {
+  onAuthStateChanged(auth, async (u) => {
+    if (!u) { $("auth").hidden = false; $("dash").hidden = true; return; }
+    let ok = false;
+    try { ok = (await getDoc(doc(db, "admins", u.uid))).exists(); } catch (e) {}
+    if (!ok) {
+      await signOut(auth);
+      $("auth").hidden = false; $("dash").hidden = true;
+      return say("a-msg", "Account hii haina ruhusa ya admin.");
+    }
+    $("auth").hidden = true; $("dash").hidden = false;
+    load();
+  });
+}
+
+$("f-in").addEventListener("submit", async (e) => {
+  e.preventDefault(); say("a-msg", ""); $("a-btn").disabled = true;
+  try { await signInWithEmailAndPassword(auth, $("a-email").value.trim(), $("a-pass").value); }
+  catch (err) { say("a-msg", authError(err)); }
+  $("a-btn").disabled = false;
+});
+$("logout").onclick = () => signOut(auth);
+
+async function load() {
+  const snap = await getDocs(collection(db, "rooms"));
+  ALL = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+  render();
+}
+function render() {
+  ["pending", "approved", "rejected"].forEach((s) => {
+    $("c-" + s).textContent = "(" + ALL.filter((r) => r.status === s).length + ")";
+  });
+  document.querySelectorAll("#tabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.s === cur));
+  const rows = ALL.filter((r) => r.status === cur);
+  $("list").innerHTML = rows.length ? rows.map((r) => `
+    <div class="panel item" data-id="${r.id}">
+      <img class="t" src="${r.thumb}" alt="">
+      <div>
+        <h3>${esc(r.title)}</h3>
+        <p class="where">${esc(r.type)} · ${esc(r.area)}${r.chuo ? " · karibu na " + esc(r.chuo) : ""} · ${money(r.price)}${r.walk ? " · dakika " + esc(r.walk) : ""}</p>
+        <p class="where">Dalali: ${esc(r.dalaliName)} · ${esc(r.phone)}</p>
+        <p style="margin:6px 0 0;white-space:pre-line">${esc(r.description)}</p>
+      </div>
+      <div class="photos-line" data-photos></div>
+      <div class="acts">
+        <button class="btn ghost small" type="button" data-act="photos">Angalia picha</button>
+        ${r.status !== "approved" ? '<button class="btn small" type="button" data-act="approved">Kubali</button>' : ""}
+        ${r.status !== "rejected" ? '<button class="btn ghost small" type="button" data-act="rejected">Kataa</button>' : ""}
+        <button class="btn ghost small" type="button" data-act="del">Futa</button>
+      </div>
+    </div>`).join("") : '<div class="empty">Hakuna vyumba hapa kwa sasa.</div>';
+}
+$("tabs").addEventListener("click", (e) => { const b = e.target.closest("button[data-s]"); if (b) { cur = b.dataset.s; render(); } });
+
+$("list").addEventListener("click", async (e) => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const box = b.closest("[data-id]"), id = box.dataset.id, act = b.dataset.act;
+  b.disabled = true;
+  try {
+    if (act === "photos") {
+      const s = await getDoc(doc(db, "roomPhotos", id));
+      box.querySelector("[data-photos]").innerHTML = s.exists() ? s.data().photos.map((p) => `<img src="${p}" alt="">`).join("") : "Hakuna picha.";
+    } else if (act === "del") {
+      if (!confirm("Futa chumba hiki kabisa?")) { b.disabled = false; return; }
+      try { await deleteDoc(doc(db, "roomPhotos", id)); } catch (x) {}
+      await deleteDoc(doc(db, "rooms", id));
+      await load();
+    } else {
+      await updateDoc(doc(db, "rooms", id), { status: act });
+      await load();
+    }
+  } catch (err) { alert("Imeshindikana. Jaribu tena."); }
+  b.disabled = false;
+});
+</script>
+</body>
+</html>
